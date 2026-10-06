@@ -21,9 +21,22 @@
   <hr>
 
   <h2>support</h2>
-  <p>Supporters: <strong>{{ profile.supporter_count }}</strong></p>
-  <p>Estimated monthly supporter income: <strong>${{ profile.monthly_income }}</strong> <span class="muted">($3/month/supporter)</span></p>
-  <p>(Additional income will come from subscribers who have not elected to support any artist)</p>
+  <p>Current supporters: <strong>{{ profile.supporter_count }}</strong></p>
+  <p>
+    {{ month_start|date:"F" }} so far: <strong>{{ month_new_count }}</strong> new supporter{{ month_new_count|pluralize }}
+    and <strong>{{ month_renewal_count }}</strong> renewal{{ month_renewal_count|pluralize }}
+    &rarr; <strong>${{ month_owed }}</strong>, paid at the end of {{ month_start|date:"F" }}
+    <span class="muted">($36 each)</span>
+  </p>
+  <p>
+    Your share of subscribers who didn't pick an artist, {{ month_start|date:"Y" }} so far:
+    <strong>${{ pool_ytd }}</strong>, paid at the end of the year
+  </p>
+  <p class="muted">
+    These amounts can still change until the end of {{ month_start|date:"F" }}: subscribers can set or
+    change the artist they support until the end of the month they pay.
+    <a href="{% url 'money-transparency' %}">how the money works</a>
+  </p>
   <hr>
 
   <div style="display: flex; justify-content: space-between; align-items: baseline;">

@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from decimal import Decimal
 
 import stripe
@@ -6,8 +7,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.contrib.auth.models import User
-from django.db.models import Count, Q
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone as tz
 from django.utils.decorators import method_decorator
@@ -18,7 +18,11 @@ from django.views.decorators.csrf import csrf_exempt
 from artists.models import ArtistProfile
 from artists.navidrome import grant_library_access, revoke_library_access
 from .forms import DesignatedArtistForm
-from .models import SubscriberProfile
+from .models import SubscriberProfile, SubscriptionPayment, SubscriptionStatusChange
+from .payouts import (
+    ARTIST_PER_SUBSCRIPTION, CMN_PER_SUBSCRIPTION, SUBSCRIPTION_PRICE,
+    attribution_status, month_payouts, month_start, next_month, prev_month,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,12 @@ class AccountSettingsView(LoginRequiredMixin, View):
             'profile': profile,
             'artist_profile': getattr(request.user, 'artist_profile', None),
             'designated_artist_form': form or DesignatedArtistForm(subscriber=profile),
+            'attribution': attribution_status(profile),
+            'renews': (
+                profile.subscription_status == SubscriberProfile.STATUS_ACTIVE
+                and not profile.cancel_at_period_end
+                and profile.current_period_end
+            ),
             'artist_names': ArtistProfile.objects.filter(
                 status=ArtistProfile.STATUS_APPROVED
             ).order_by('display_name').values_list('display_name', flat=True),
@@ -208,9 +218,17 @@ class StripeWebhookView(View):
         subscription_id = invoice.get('subscription')
         if not subscription_id:
             return
-        try:
-            profile = SubscriberProfile.objects.get(stripe_subscription_id=subscription_id)
-        except SubscriberProfile.DoesNotExist:
+        profile = (
+            SubscriberProfile.objects.filter(stripe_subscription_id=subscription_id).first()
+            # The first invoice can arrive before checkout.session.completed stores the subscription id.
+            or SubscriberProfile.objects.filter(stripe_customer_id=invoice.get('customer') or '').first()
+        )
+        if not profile:
+            return
+
+        SubscriptionPayment.record_from_invoice(profile, invoice)
+
+        if profile.stripe_subscription_id != subscription_id:
             return
 
         period_end = invoice.get('lines', {}).get('data', [{}])[0].get('period', {}).get('end')
@@ -326,47 +344,111 @@ class AdminUserListView(StaffRequiredMixin, View):
 class AdminMoneyView(StaffRequiredMixin, View):
     template_name = 'subscribers/admin_money.html'
 
-    CMN_PER_SUBSCRIBER_YEAR = Decimal('4.00')
-    ARTIST_PER_SUBSCRIBER_YEAR = Decimal('36.00')
-    MONTHLY_PER_SUPPORTER = Decimal('3.00')
-
     def get(self, request):
-        active_subscribers = SubscriberProfile.objects.filter(subscription_status=SubscriberProfile.STATUS_ACTIVE)
-        active_count = active_subscribers.count()
-        no_artist_count = active_subscribers.filter(designated_artist__isnull=True).count()
+        now = tz.localtime()
+        current = (now.year, now.month)
+        year, month = self._parse_month(request.GET.get('month'), current)
+        if (year, month) > current:
+            raise Http404
 
-        artists = ArtistProfile.objects.filter(status=ArtistProfile.STATUS_APPROVED).annotate(
-            direct_supporter_count=Count(
-                'supporters',
-                filter=Q(supporters__subscription_status=SubscriberProfile.STATUS_ACTIVE),
-            )
-        ).order_by('-direct_supporter_count', 'display_name')
+        payouts = month_payouts(year, month)
 
-        artist_count = artists.count()
-        orphan_share = (
-            (Decimal(no_artist_count) * self.MONTHLY_PER_SUPPORTER / artist_count)
-            if artist_count else Decimal('0.00')
-        )
+        artists_by_pk = {artist.pk: artist for artist in payouts.pool_artists}
+        for payment in payouts.payments:
+            if payment.artist is not None:
+                artists_by_pk.setdefault(payment.artist.pk, payment.artist)
 
-        artist_rows = [
-            {
+        artist_rows = []
+        for artist in artists_by_pk.values():
+            attributed = payouts.attributed_to(artist)
+            new_count = sum(1 for p in attributed if not p.is_renewal)
+            attributed_amount = len(attributed) * ARTIST_PER_SUBSCRIPTION
+            pool_share = payouts.pool_share_for(artist)
+            artist_rows.append({
                 'artist': artist,
-                'supporter_count': artist.direct_supporter_count,
-                'monthly_income': (Decimal(artist.direct_supporter_count) * self.MONTHLY_PER_SUPPORTER) + orphan_share,
-            }
-            for artist in artists
-        ]
+                'new_count': new_count,
+                'renewal_count': len(attributed) - new_count,
+                'attributed_amount': attributed_amount,
+                'pool_share': pool_share,
+                'pool_ytd': payouts.artist_pool_ytd.get(artist.pk, Decimal('0.00')),
+                'total': attributed_amount + pool_share,
+            })
+        artist_rows.sort(key=lambda row: (-row['total'], row['artist'].display_name.lower()))
 
+        payments = payouts.payments
+        new_payments = [p for p in payments if not p.is_renewal]
+        renewal_payments = [p for p in payments if p.is_renewal]
+        payment_count = len(payments)
+        unattributed_count = len(payouts.unattributed)
+        earliest = self._earliest_month(current)
+        prev = prev_month(year, month)
+        nxt = next_month(year, month)
         context = {
-            'active_count': active_count,
-            'no_artist_count': no_artist_count,
-            'artist_count': artist_count,
-            'cmn_total': active_count * self.CMN_PER_SUBSCRIBER_YEAR,
-            'artist_total': active_count * self.ARTIST_PER_SUBSCRIBER_YEAR,
-            'orphan_share': orphan_share,
+            'month_start': month_start(year, month),
+            'is_current_month': (year, month) == current,
+            'prev_month': f'{prev[0]:04d}-{prev[1]:02d}' if prev >= earliest else None,
+            'next_month': f'{nxt[0]:04d}-{nxt[1]:02d}' if nxt <= current else None,
+            'active_count': SubscriberProfile.objects.filter(subscription_status=SubscriberProfile.STATUS_ACTIVE).count(),
+            'new_count': len(new_payments),
+            'new_unattributed_count': sum(1 for p in new_payments if p.artist is None),
+            'renewal_count': len(renewal_payments),
+            'renewal_unattributed_count': sum(1 for p in renewal_payments if p.artist is None),
+            'payment_count': payment_count,
+            'unattributed_count': unattributed_count,
+            'gross_total': payment_count * SUBSCRIPTION_PRICE,
+            'cmn_total': payment_count * CMN_PER_SUBSCRIPTION,
+            'attributed_total': (payment_count - unattributed_count) * ARTIST_PER_SUBSCRIPTION,
+            'pool_total': payouts.pool_total,
+            'pool_artist_count': len(payouts.pool_artists),
+            'pool_share': payouts.pool_share,
             'artist_rows': artist_rows,
+            'stripe_price': self._stripe_price_description(),
         }
         return render(request, self.template_name, context)
+
+    @staticmethod
+    def _stripe_price_description():
+        """e.g. '$40.00 / year', read live from the Stripe price new subscribers are charged."""
+        price_id = settings.STRIPE_SUBSCRIPTION_PRICE_ID
+        if not price_id:
+            return None
+        stripe.api_key = settings.STRIPE_SECRET_KEY
+        try:
+            price = stripe.Price.retrieve(price_id)
+        except stripe.error.StripeError:
+            logger.exception('Failed to retrieve Stripe price %s', price_id)
+            return None
+        amount = f"${Decimal(price['unit_amount'] or 0) / 100:.2f}"
+        recurring = price.get('recurring')
+        if not recurring:
+            return f'{amount} (one-time)'
+        interval, count = recurring['interval'], recurring.get('interval_count') or 1
+        return f'{amount} / {interval}' if count == 1 else f'{amount} every {count} {interval}s'
+
+    @staticmethod
+    def _parse_month(value, default):
+        if not value:
+            return default
+        try:
+            parsed = datetime.strptime(value, '%Y-%m')
+        except ValueError:
+            raise Http404
+        return parsed.year, parsed.month
+
+    @staticmethod
+    def _earliest_month(current):
+        firsts = [
+            qs.order_by(field).values_list(field, flat=True).first()
+            for qs, field in (
+                (SubscriptionStatusChange.objects.all(), 'changed_at'),
+                (SubscriptionPayment.objects.all(), 'paid_at'),
+            )
+        ]
+        firsts = [tz.localtime(f) for f in firsts if f]
+        if not firsts:
+            return current
+        first = min(firsts)
+        return min((first.year, first.month), current)
 
 
 class AdminGrantTemporaryAccessView(StaffRequiredMixin, View):

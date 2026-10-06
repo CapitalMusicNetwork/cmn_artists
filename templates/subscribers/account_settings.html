@@ -23,10 +23,30 @@
   <hr>
 
   <h2>artist you support</h2>
-  <p class="muted">90% of your subscription fee goes directly to the artist you designate below.
-    If you leave this blank, the same 90% will be divided equally among all artists on the platform.
+  <p class="muted">
+    $36 of each $40 subscription payment (90%) goes directly to the artist you choose below.
+    If you leave this blank, it's divided equally among all artists on the platform.
+    You can choose or change your artist until the end of the month you pay. After that, the $36 for
+    that payment is locked in, and any change applies to your next annual payment.
   </p>
-  {% if profile.designated_artist %}
+  {% if attribution and not attribution.is_locked %}
+    <p>
+      Your {{ attribution.paid_month|date:"F Y" }} payment is going to
+      {% if profile.designated_artist %}<strong>{{ profile.designated_artist.display_name }}</strong>{% else %}<strong>all artists</strong>, split equally{% endif %}.
+      You can change this until the end of <strong>{{ attribution.last_changeable_day|date:"F j" }}</strong>.
+    </p>
+  {% elif attribution %}
+    <p>
+      Your {{ attribution.paid_month|date:"F Y" }} payment went to
+      {% if attribution.locked_artist %}<strong>{{ attribution.locked_artist.display_name }}</strong>{% else %}<strong>all artists</strong>, split equally{% endif %}
+      <span class="muted">(locked in)</span>.
+    </p>
+    <p>
+      {% if renews %}Your next payment on <strong>{{ profile.current_period_end|date:"F j, Y" }}</strong> will go to
+      {% else %}If you subscribe again, your next payment will go to{% endif %}
+      {% if profile.designated_artist %}<strong>{{ profile.designated_artist.display_name }}</strong>{% else %}<strong>all artists</strong>, split equally{% endif %}.
+    </p>
+  {% elif profile.designated_artist %}
     <p>Currently supporting: <strong>{{ profile.designated_artist.display_name }}</strong></p>
   {% endif %}
   <form method="POST">

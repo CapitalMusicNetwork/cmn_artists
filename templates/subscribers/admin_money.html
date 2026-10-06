@@ -6,39 +6,70 @@
 <div class="page wide">
   <h1>money</h1>
 
+  <p>
+    Subscription price in Stripe:
+    {% if stripe_price %}<strong>{{ stripe_price }}</strong>{% else %}<span class="muted">couldn't load from Stripe</span>{% endif %}
+  </p>
+
+  <p class="month-nav">
+    {% if prev_month %}<a href="?month={{ prev_month }}">&larr; previous month</a>{% else %}<span class="muted">&larr; previous month</span>{% endif %}
+    |
+    <strong>{{ month_start|date:"F Y" }}</strong>{% if is_current_month %} <span class="muted">(so far)</span>{% endif %}
+    |
+    {% if next_month %}<a href="?month={{ next_month }}">next month &rarr;</a>{% else %}<span class="muted">next month &rarr;</span>{% endif %}
+    {% if not is_current_month %} | <a href="{% url 'admin-money' %}">current month</a>{% endif %}
+  </p>
+
+  {% if is_current_month %}
+  <p class="muted">
+    Subscribers can set or change the artist they support until the end of the month they pay,
+    so the attributed / unattributed split below can still change until {{ month_start|date:"F" }} ends.
+  </p>
+  {% endif %}
+
   <h2>overview</h2>
-  <p>Active subscriptions: <strong>{{ active_count }}</strong></p>
-  <p>To Capital Music Network: <strong>${{ cmn_total }}</strong> <span class="muted">($4/subscriber/year)</span></p>
-  <p>To artists: <strong>${{ artist_total }}</strong> <span class="muted">($36/subscriber/year)</span></p>
+  <p>New subscribers: <strong>{{ new_count }}</strong> <span class="muted">({{ new_unattributed_count }} unattributed)</span></p>
+  <p>Annual renewals: <strong>{{ renewal_count }}</strong> <span class="muted">({{ renewal_unattributed_count }} unattributed)</span></p>
+  <p>Collected: <strong>${{ gross_total }}</strong> <span class="muted">($40/subscription year)</span></p>
+  <p>To Capital Music Network: <strong>${{ cmn_total }}</strong> <span class="muted">($4/subscription year)</span></p>
+  <p>To artists, paid at the end of this month: <strong>${{ attributed_total }}</strong> <span class="muted">($36/attributed subscription year)</span></p>
+  <p>To artists, pooled and paid at the end of the year: <strong>${{ pool_total }}</strong> <span class="muted">($36/unattributed subscription year)</span></p>
+  <p class="muted">Active subscriptions right now: {{ active_count }}</p>
 
   <hr>
 
   <h2>artist breakdown</h2>
   <p class="muted">
-    Each artist earns $3/month per subscriber who designates them.
-    Subscribers who haven't designated an artist have their $3/month split evenly
-    across all {{ artist_count }} approved artist{{ artist_count|pluralize }}{% if orphan_share %} (${{ orphan_share }}/month each){% endif %}.
+    Each artist is owed $36 for every new subscriber or renewal that designates them, paid at the end of the month.
+    The $36 from each unattributed new subscriber or renewal is split evenly across all {{ pool_artist_count }}
+    artist{{ pool_artist_count|pluralize }} approved by the end of this month{% if pool_share %} (${{ pool_share }} each){% endif %},
+    and that pooled share is paid at the end of the year.
   </p>
-  <p>Subscribers supporting no artist: <strong>{{ no_artist_count }}</strong></p>
 
   <div class="table-scroll">
   <table class="admin-table">
     <thead>
       <tr>
         <th>artist</th>
-        <th>direct supporters</th>
-        <th>monthly income</th>
+        <th>attributed new subscribers</th>
+        <th>attributed renewals</th>
+        <th>owed this month</th>
+        <th>pooled share this month</th>
+        <th>pooled share {{ month_start|date:"Y" }} to date <span class="muted">(paid at year end)</span></th>
       </tr>
     </thead>
     <tbody>
       {% for row in artist_rows %}
       <tr>
         <td>{{ row.artist.display_name }}</td>
-        <td>{{ row.supporter_count }}</td>
-        <td>${{ row.monthly_income }}</td>
+        <td>{{ row.new_count }}</td>
+        <td>{{ row.renewal_count }}</td>
+        <td>${{ row.attributed_amount }}</td>
+        <td>${{ row.pool_share }}</td>
+        <td>${{ row.pool_ytd }}</td>
       </tr>
       {% empty %}
-      <tr><td colspan="3" class="muted">No approved artists yet.</td></tr>
+      <tr><td colspan="6" class="muted">No approved artists yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

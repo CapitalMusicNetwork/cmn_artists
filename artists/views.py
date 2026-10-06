@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 
 from django.conf import settings
 from django.contrib import messages
@@ -6,10 +7,12 @@ from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.mail import send_mail
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse_lazy
+from django.utils import timezone
 from django.views import View
 from django.views.generic import ListView, TemplateView, UpdateView
 
 from artists.navidrome import grant_library_access
+from subscribers.payouts import ARTIST_PER_SUBSCRIPTION, month_payouts
 from .agreement import get_artist_agreement_text
 from .forms import ArtistApplicationForm, ArtistProfileForm
 from .models import ArtistProfile
@@ -53,6 +56,15 @@ class ProfileView(LoginRequiredMixin, TemplateView):
         profile = getattr(self.request.user, 'artist_profile', None)
         context['profile'] = profile
         context['albums'] = profile.albums.prefetch_related('tracks').order_by('-created_at')
+
+        now = timezone.localtime()
+        payouts = month_payouts(now.year, now.month)
+        attributed = payouts.attributed_to(profile)
+        context['month_start'] = now.replace(day=1)
+        context['month_new_count'] = sum(1 for p in attributed if not p.is_renewal)
+        context['month_renewal_count'] = sum(1 for p in attributed if p.is_renewal)
+        context['month_owed'] = len(attributed) * ARTIST_PER_SUBSCRIPTION
+        context['pool_ytd'] = payouts.artist_pool_ytd.get(profile.pk, Decimal('0.00'))
         return context
 
 

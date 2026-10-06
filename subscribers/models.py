@@ -1,3 +1,5 @@
+from datetime import datetime, timezone as dt_timezone
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
@@ -122,3 +124,46 @@ class ArtistDesignationChange(models.Model):
         verbose_name = 'Artist Designation Change'
         verbose_name_plural = 'Artist Designation Changes'
         ordering = ['-changed_at']
+
+
+class SubscriptionPayment(models.Model):
+    """A paid Stripe invoice (new subscription or annual renewal), recorded from the invoice.paid webhook."""
+
+    BILLING_REASON_CREATE = 'subscription_create'
+    BILLING_REASON_CYCLE = 'subscription_cycle'
+
+    subscriber = models.ForeignKey(SubscriberProfile, on_delete=models.CASCADE, related_name='payments')
+    stripe_invoice_id = models.CharField(max_length=100, unique=True)
+    billing_reason = models.CharField(
+        max_length=50, blank=True,
+        help_text="Stripe's billing_reason: 'subscription_create' for a first payment, "
+                  "'subscription_cycle' for a renewal.",
+    )
+    amount_paid = models.PositiveIntegerField(help_text='In cents.')
+    paid_at = models.DateTimeField()
+
+    @classmethod
+    def record_from_invoice(cls, subscriber, invoice):
+        """Record a paid Stripe invoice; safe to call more than once for the same invoice."""
+        paid_at = (invoice.get('status_transitions') or {}).get('paid_at')
+        return cls.objects.get_or_create(
+            stripe_invoice_id=invoice['id'],
+            defaults={
+                'subscriber': subscriber,
+                'billing_reason': invoice.get('billing_reason') or '',
+                'amount_paid': invoice.get('amount_paid') or 0,
+                'paid_at': datetime.fromtimestamp(paid_at, tz=dt_timezone.utc) if paid_at else timezone.now(),
+            },
+        )
+
+    @property
+    def is_renewal(self):
+        return self.billing_reason == self.BILLING_REASON_CYCLE
+
+    def __str__(self):
+        return f'{self.subscriber.user.email} ${self.amount_paid / 100:.2f} ({self.billing_reason}) @ {self.paid_at}'
+
+    class Meta:
+        verbose_name = 'Subscription Payment'
+        verbose_name_plural = 'Subscription Payments'
+        ordering = ['-paid_at']
