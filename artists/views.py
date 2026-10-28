@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.contrib.auth.mixins import LoginRequiredMixin, UserPassesTestMixin
 from django.core.mail import send_mail
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
 from django.utils import timezone
 from django.views import View
 from django.views.generic import ListView, TemplateView, UpdateView
@@ -123,16 +123,60 @@ class ArtistApplicationView(LoginRequiredMixin, View):
             artist_profile.user = request.user
             artist_profile.status = ArtistProfile.STATUS_PENDING
             artist_profile.save()
+            self._send_emails(request, artist_profile)
             messages.success(request,
                              "Thanks for submitting your application! " \
                              "We will review and will send you an email once " \
                              "we've made a decision. If you need help in the " \
                              "meantime, you can reach out to " + settings.SUPPORT_EMAIL)
             return redirect('dashboard')
+        logger.warning('Artist application rejected for %s: %s', request.user.email, form.errors.as_json())
         return render(request, self.template_name, {
             'form': form,
             'artist_agreement_text': get_artist_agreement_text(),
         })
+
+    @staticmethod
+    def _send_emails(request, artist_profile):
+        """Confirm receipt to the applicant and alert support. Failures are logged,
+        not raised, so a mail outage never loses an application."""
+        user = artist_profile.user
+        try:
+            send_mail(
+                subject='We received your artist application — Capital Music Network',
+                message=(
+                    f"Hi {artist_profile.display_name},\n\n"
+                    f"Thanks for applying to submit music to Capital Music Network. We'll review your "
+                    f"application and email you once we've made a decision. If you have questions in the "
+                    f"meantime, reach out to {settings.SUPPORT_EMAIL}.\n\n"
+                    f"A copy of the artist agreement you agreed to is below.\n\n"
+                    f"— Capital Music Network\n\n"
+                    f"{'=' * 60}\n"
+                    f"ARTIST AGREEMENT\n"
+                    f"{'=' * 60}\n\n"
+                    f"{get_artist_agreement_text()}"
+                ),
+                from_email=None,
+                recipient_list=[user.email],
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception('Failed to send application confirmation email to %s', user.email)
+
+        try:
+            send_mail(
+                subject=f'New artist application: {artist_profile.display_name}',
+                message=(
+                    f"{artist_profile.display_name} ({user.email}) applied for artist access.\n\n"
+                    f"About them:\n{artist_profile.note or '(nothing provided)'}\n\n"
+                    f"Review it: {request.build_absolute_uri(reverse('admin-application-list'))}"
+                ),
+                from_email=None,
+                recipient_list=[settings.SUPPORT_EMAIL],
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception('Failed to send new application alert for %s', user.email)
 
 
 class AdminApplicationListView(LoginRequiredMixin, UserPassesTestMixin, ListView):
@@ -169,7 +213,7 @@ class AdminApplicationApproveView(LoginRequiredMixin, UserPassesTestMixin, View)
         subscriber_profile.save(update_fields=['subscription_status'])
 
         navidrome_url = getattr(settings, 'NAVIDROME_BASE_URL', '')
-        if navidrome_url and subscriber_profile.navidrome_user_id:
+        if navidrome_url and subscriber_profile.navidrome_user_id and subscriber_profile.library_access_managed:
             try:
                 grant_library_access(
                     base_url=navidrome_url,

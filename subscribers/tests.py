@@ -48,15 +48,139 @@ class AdminUserListViewTests(TestCase):
         self.assertNotContains(response, 'not renewing')
 
 
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
+class AdminUserListAccessButtonTests(TestCase):
+    def setUp(self):
+        staff = User.objects.create_user(username='staff@example.com', email='staff@example.com', is_staff=True)
+        self.client.force_login(staff)
+        self.profile = make_subscriber('listener@example.com')
+        self.profile.navidrome_user_id = 'nd1'
+
+    def buttons(self, **fields):
+        for k, v in fields.items():
+            setattr(self.profile, k, v)
+        self.profile.save()
+        content = self.client.get('/subscribe/admin/users/').content.decode()
+        return (f'/users/{self.profile.pk}/grant-navidrome-access/' in content,
+                f'/users/{self.profile.pk}/revoke-navidrome-access/' in content)
+
+    def test_no_buttons_without_subscription_or_temp_access(self):
+        self.assertEqual(self.buttons(), (False, False))
+
+    def test_grant_shown_for_subscriber_missing_access(self):
+        self.assertEqual(self.buttons(subscription_status=SubscriberProfile.STATUS_ACTIVE), (True, False))
+
+    def test_no_buttons_for_subscriber_with_access(self):
+        self.assertEqual(self.buttons(subscription_status=SubscriberProfile.STATUS_ACTIVE,
+                                      library_access_granted=True), (False, False))
+
+    def test_only_revoke_shown_for_temp_access_already_granted(self):
+        until = timezone.now() + timezone.timedelta(days=5)
+        self.assertEqual(self.buttons(temporary_access_until=until, library_access_granted=True), (False, True))
+
+    def test_grant_and_revoke_shown_for_temp_access_after_failed_sync(self):
+        until = timezone.now() + timezone.timedelta(days=5)
+        self.assertEqual(self.buttons(temporary_access_until=until, navidrome_access_error=True), (True, True))
+
+    def test_only_revoke_shown_when_access_outlived_entitlement(self):
+        self.assertEqual(self.buttons(library_access_granted=True), (False, True))
+
+
+@override_settings(NAVIDROME_BASE_URL='https://nd.example.com')
+class AdminGrantRevokeEntitlementTests(TestCase):
+    def setUp(self):
+        import unittest.mock as mock
+        staff = User.objects.create_user(username='staff@example.com', email='staff@example.com', is_staff=True)
+        self.client.force_login(staff)
+        self.profile = make_subscriber('listener@example.com')
+        self.profile.navidrome_user_id = 'nd1'
+        self.profile.save()
+        for name in ('grant_library_access', 'revoke_library_access'):
+            patcher = mock.patch(f'subscribers.views.{name}')
+            setattr(self, name, patcher.start())
+            self.addCleanup(patcher.stop)
+
+    def test_grant_refused_without_subscription_or_temp_access(self):
+        self.client.post(f'/subscribe/admin/users/{self.profile.pk}/grant-navidrome-access/')
+
+        self.grant_library_access.assert_not_called()
+        self.profile.refresh_from_db()
+        self.assertFalse(self.profile.library_access_granted)
+
+    def test_revoke_refused_for_active_subscriber(self):
+        self.profile.subscription_status = SubscriberProfile.STATUS_ACTIVE
+        self.profile.library_access_granted = True
+        self.profile.save()
+
+        self.client.post(f'/subscribe/admin/users/{self.profile.pk}/revoke-navidrome-access/')
+
+        self.revoke_library_access.assert_not_called()
+
+    def test_revoke_ends_temporary_access(self):
+        self.profile.temporary_access_until = timezone.now() + timezone.timedelta(days=5)
+        self.profile.library_access_granted = True
+        self.profile.save()
+
+        self.client.post(f'/subscribe/admin/users/{self.profile.pk}/revoke-navidrome-access/')
+
+        self.revoke_library_access.assert_called_once()
+        self.profile.refresh_from_db()
+        self.assertFalse(self.profile.library_access_granted)
+        self.assertIsNone(self.profile.temporary_access_until)
+
+
 class StaffLibraryAccessTests(TestCase):
     def test_staff_have_library_access_regardless_of_subscription_status(self):
         profile = make_subscriber('staffer@example.com', is_staff=True)
-        self.assertEqual(profile.subscription_status, SubscriberProfile.STATUS_PENDING)
+        self.assertEqual(profile.subscription_status, SubscriberProfile.STATUS_NONE)
         self.assertTrue(profile.should_have_library_access)
 
-    def test_non_staff_pending_subscriber_has_no_library_access(self):
+    def test_non_staff_unsubscribed_subscriber_has_no_library_access(self):
         profile = make_subscriber('regular@example.com', is_staff=False)
         self.assertFalse(profile.should_have_library_access)
+
+
+@override_settings(NAVIDROME_BASE_URL='https://nd.example.com')
+class StaffLibraryAccessNotManagedTests(TestCase):
+    """Staff are Navidrome admins, which Navidrome refuses to assign libraries to."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='admin@example.com', email='admin@example.com', is_staff=True)
+        self.client.force_login(self.admin)
+        self.staffer = make_subscriber('staffer@example.com', is_staff=True)
+        self.staffer.navidrome_user_id = 'nd-staff'
+        self.staffer.save()
+
+    def test_admin_grant_and_revoke_skip_navidrome_for_staff(self):
+        import unittest.mock as mock
+        with mock.patch('subscribers.views.grant_library_access') as grant, \
+                mock.patch('subscribers.views.revoke_library_access') as revoke:
+            for url in ('grant-navidrome-access', 'revoke-navidrome-access'):
+                self.client.post(f'/subscribe/admin/users/{self.staffer.pk}/{url}/')
+            self.client.post(f'/subscribe/admin/users/{self.staffer.pk}/grant-access/', {'days': '30'})
+
+        grant.assert_not_called()
+        revoke.assert_not_called()
+        self.staffer.refresh_from_db()
+        self.assertIsNone(self.staffer.temporary_access_until)
+        self.assertFalse(self.staffer.navidrome_access_error)
+
+    def test_webhook_grant_skips_navidrome_for_staff(self):
+        import unittest.mock as mock
+        with mock.patch('subscribers.views.grant_library_access') as grant:
+            StripeWebhookView()._grant_access(self.staffer)
+        grant.assert_not_called()
+
+    @override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
+    def test_user_list_hides_access_controls_for_staff(self):
+        self.staffer.navidrome_access_error = True
+        self.staffer.save()
+
+        response = self.client.get('/subscribe/admin/users/')
+
+        self.assertContains(response, 'full access (staff)')
+        self.assertNotContains(response, f'/subscribe/admin/users/{self.staffer.pk}/grant-navidrome-access/')
+        self.assertNotContains(response, 'sync failed')
 
 
 class SubscriptionStatusHistoryTests(TestCase):

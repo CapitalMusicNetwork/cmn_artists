@@ -118,7 +118,7 @@ class SubscriberDashboardView(LoginRequiredMixin, TemplateView):
         profile = self.request.user.subscriber_profile
         context['profile'] = profile
         context['can_subscribe'] = profile.subscription_status in (
-            SubscriberProfile.STATUS_PENDING,
+            SubscriberProfile.STATUS_NONE,
             SubscriberProfile.STATUS_CANCELED,
         )
         context['support_email'] = settings.SUPPORT_EMAIL
@@ -282,7 +282,7 @@ class StripeWebhookView(View):
 
     def _grant_access(self, profile):
         navidrome_url = getattr(settings, 'NAVIDROME_BASE_URL', '')
-        if not navidrome_url or not profile.navidrome_user_id:
+        if not navidrome_url or not profile.navidrome_user_id or not profile.library_access_managed:
             return
         try:
             grant_library_access(
@@ -304,7 +304,7 @@ class StripeWebhookView(View):
 
     def _revoke_access(self, profile):
         navidrome_url = getattr(settings, 'NAVIDROME_BASE_URL', '')
-        if not navidrome_url or not profile.navidrome_user_id:
+        if not navidrome_url or not profile.navidrome_user_id or not profile.library_access_managed:
             return
         try:
             revoke_library_access(
@@ -454,6 +454,9 @@ class AdminMoneyView(StaffRequiredMixin, View):
 class AdminGrantTemporaryAccessView(StaffRequiredMixin, View):
     def post(self, request, pk):
         profile = get_object_or_404(SubscriberProfile, pk=pk)
+        if not profile.library_access_managed:
+            messages.error(request, f'{profile.user.email} is staff and already has full access.')
+            return redirect('admin-user-list')
         days_str = request.POST.get('days', '').strip()
 
         try:
@@ -544,7 +547,7 @@ class AdminResyncNavidromeView(StaffRequiredMixin, View):
 
 
 class AdminGrantNavidromeAccessView(StaffRequiredMixin, View):
-    """Grant Navidrome library access, regardless of Stripe subscription status. For manual/testing use."""
+    """Re-grant Navidrome library access to a user who's entitled to it but whose grant is missing or failed."""
 
     def post(self, request, pk):
         profile = get_object_or_404(SubscriberProfile, pk=pk)
@@ -552,6 +555,13 @@ class AdminGrantNavidromeAccessView(StaffRequiredMixin, View):
         navidrome_url = getattr(settings, 'NAVIDROME_BASE_URL', '')
         if not navidrome_url or not profile.navidrome_user_id:
             messages.error(request, f'{profile.user.email} has no Navidrome account to grant access to.')
+            return redirect('admin-user-list')
+        if not profile.library_access_managed:
+            messages.error(request, f'{profile.user.email} is staff and already has full access.')
+            return redirect('admin-user-list')
+        if not profile.admin_can_grant_access:
+            messages.error(request, f'{profile.user.email} has no subscription or temporary access to grant. '
+                                    f'Use temporary access to give them free access.')
             return redirect('admin-user-list')
 
         try:
@@ -578,7 +588,7 @@ class AdminGrantNavidromeAccessView(StaffRequiredMixin, View):
 
 
 class AdminRevokeNavidromeAccessView(StaffRequiredMixin, View):
-    """Revoke Navidrome library access, regardless of Stripe subscription status. For manual/testing use."""
+    """Revoke Navidrome library access (ending any temporary access) from a user without a subscription."""
 
     def post(self, request, pk):
         profile = get_object_or_404(SubscriberProfile, pk=pk)
@@ -586,6 +596,13 @@ class AdminRevokeNavidromeAccessView(StaffRequiredMixin, View):
         navidrome_url = getattr(settings, 'NAVIDROME_BASE_URL', '')
         if not navidrome_url or not profile.navidrome_user_id:
             messages.error(request, f'{profile.user.email} has no Navidrome account to revoke access from.')
+            return redirect('admin-user-list')
+        if not profile.library_access_managed:
+            messages.error(request, f'{profile.user.email} is staff and already has full access.')
+            return redirect('admin-user-list')
+        if not profile.admin_can_revoke_access:
+            messages.error(request, f'{profile.user.email} has a subscription or artist access; '
+                                    f'revoking would just be undone.')
             return redirect('admin-user-list')
 
         try:
@@ -605,6 +622,7 @@ class AdminRevokeNavidromeAccessView(StaffRequiredMixin, View):
 
         profile.navidrome_access_error = False
         profile.library_access_granted = False
-        profile.save(update_fields=['navidrome_access_error', 'library_access_granted'])
+        profile.temporary_access_until = None
+        profile.save(update_fields=['navidrome_access_error', 'library_access_granted', 'temporary_access_until'])
         messages.success(request, f'Navidrome library access revoked for {profile.user.email}.')
         return redirect('admin-user-list')

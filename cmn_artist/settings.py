@@ -49,6 +49,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'allauth.account.middleware.AccountMiddleware',
     'hijack.middleware.HijackUserMiddleware',
+    'cmn_artist.activity.ActivityLogMiddleware',
 ]
 
 ROOT_URLCONF = 'cmn_artist.urls'
@@ -196,6 +197,17 @@ LOGGING = {
         'django.request': {
             'handlers': ['console'],
             'level': 'ERROR',
+            'propagate': False,
+        },
+        # Per-request trail (see cmn_artist.activity) and Navidrome API traffic.
+        'activity': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'artists.navidrome': {
+            'handlers': ['console'],
+            'level': 'INFO',
             'propagate': False,
         },
     },

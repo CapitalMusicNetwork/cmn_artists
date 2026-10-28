@@ -6,13 +6,13 @@ from django.utils import timezone
 
 
 class SubscriberProfile(models.Model):
-    STATUS_PENDING = 'pending'
+    STATUS_NONE = 'none'
     STATUS_ACTIVE = 'active'
     STATUS_ARTIST = 'artist'
     STATUS_PAST_DUE = 'past_due'
     STATUS_CANCELED = 'canceled'
     STATUS_CHOICES = [
-        (STATUS_PENDING, 'Pending'),
+        (STATUS_NONE, 'None'),
         (STATUS_ACTIVE, 'Active'),
         (STATUS_ARTIST, 'Artist (free access)'),
         (STATUS_PAST_DUE, 'Past Due'),
@@ -22,7 +22,7 @@ class SubscriberProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='subscriber_profile')
     stripe_customer_id = models.CharField(max_length=100, blank=True)
     stripe_subscription_id = models.CharField(max_length=100, blank=True)
-    subscription_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    subscription_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_NONE)
     current_period_end = models.DateTimeField(null=True, blank=True)
     cancel_at_period_end = models.BooleanField(
         default=False,
@@ -77,6 +77,27 @@ class SubscriberProfile(models.Model):
         if self.temporary_access_until and self.temporary_access_until > timezone.now():
             return True
         return False
+
+    @property
+    def library_access_managed(self):
+        """Whether we grant/revoke Navidrome libraries for this user. Staff should be
+        Navidrome admins, who see every library and can't be assigned libraries."""
+        return not self.user.is_staff
+
+    @property
+    def admin_can_grant_access(self):
+        """Staff "grant access" only repairs entitled users whose grant is missing or failed;
+        it never hands out open-ended access (use temporary access for that)."""
+        return (self.library_access_managed and self.should_have_library_access
+                and (not self.library_access_granted or self.navidrome_access_error))
+
+    @property
+    def admin_can_revoke_access(self):
+        """Staff "revoke access" removes access (ending any temporary access) from anyone
+        not covered by a subscription or artist status."""
+        return (self.library_access_managed
+                and self.subscription_status not in (self.STATUS_ACTIVE, self.STATUS_ARTIST)
+                and (self.library_access_granted or self.navidrome_access_error))
 
     @property
     def temporary_access_active(self):

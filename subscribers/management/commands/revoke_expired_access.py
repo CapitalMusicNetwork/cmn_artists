@@ -20,7 +20,7 @@ class Command(BaseCommand):
             temporary_access_until__isnull=False,
         ).exclude(
             subscription_status__in=(SubscriberProfile.STATUS_ACTIVE, SubscriberProfile.STATUS_ARTIST)
-        ).select_related('user')
+        ).exclude(user__is_staff=True).select_related('user')
 
         count = 0
         for profile in expired:

@@ -21,7 +21,7 @@
           <a href="{% url 'profile' %}">artist profile</a>
         {% elif user.is_staff %}
           {# staff get complimentary access and have no subscription to manage #}
-        {% elif user.subscriber_profile.subscription_status == 'pending' or user.subscriber_profile.subscription_status == 'canceled' %}
+        {% elif user.subscriber_profile.subscription_status == 'none' or user.subscriber_profile.subscription_status == 'canceled' %}
           <a href="{% url 'subscriber-dashboard' %}">get streaming access</a>
         {% else %}
           <a href="{% url 'subscriber-dashboard' %}">subscription</a>

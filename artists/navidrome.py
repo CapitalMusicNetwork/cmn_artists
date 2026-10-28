@@ -1,10 +1,15 @@
+import json
 import logging
 import uuid
 from urllib.parse import urlparse
 
 import requests
 
+from cmn_artist.activity import redact
+
 logger = logging.getLogger(__name__)
+
+MAX_LOGGED_BODY = 2000
 
 
 def _raise_for_status(resp: requests.Response) -> None:
@@ -16,9 +21,30 @@ def _raise_for_status(resp: requests.Response) -> None:
         raise requests.HTTPError(f"{exc}: {resp.text}", response=resp) from exc
 
 
+def _loggable_body(body) -> str:
+    """JSON bodies are logged with passwords/tokens redacted; anything else as plain text."""
+    if not body:
+        return ''
+    try:
+        text = json.dumps(redact(json.loads(body)))
+    except ValueError:
+        text = body.decode('utf-8', 'replace') if isinstance(body, bytes) else str(body)
+    return text[:MAX_LOGGED_BODY]
+
+
+def _log_exchange(resp: requests.Response, *args, **kwargs) -> None:
+    """requests response hook: log every call we make to Navidrome."""
+    req = resp.request
+    logger.info(
+        'Navidrome %s %s -> %s request=%s response=%s',
+        req.method, req.url, resp.status_code, _loggable_body(req.body), _loggable_body(resp.content),
+    )
+
+
 def _admin_session(base_url: str, admin_user: str, admin_pass: str):
     """Authenticate as admin and return (session, token)."""
     session = requests.Session()
+    session.hooks['response'].append(_log_exchange)
     resp = session.post(base_url.rstrip("/") + "/auth/login",
                         json={"username": admin_user, "password": admin_pass})
     _raise_for_status(resp)
@@ -58,29 +84,31 @@ def create_navidrome_user(base_url: str, admin_user: str, admin_pass: str,
         "password": password,
         "isAdmin": False,
     }
-    # Root logger level is WARNING (see settings.LOGGING), so use warning()
-    # here rather than info() so this actually reaches the container logs.
-    logger.warning(
-        "Creating Navidrome user: userName=%r name=%r email=%r",
-        username, display_name, email,
-    )
     resp = session.post(
         base_url.rstrip("/") + "/api/user",
         json=payload,
         headers={"Content-Type": "application/json"},
     )
     _raise_for_status(resp)
-    logger.warning("Navidrome user created: id=%s", resp.json()["id"])
     return resp.json()["id"]
 
 
 def update_navidrome_password(base_url: str, admin_user: str, admin_pass: str,
                               nd_user_id: str, new_password: str) -> None:
-    """Update a Navidrome user's password via the admin API."""
+    """Update a Navidrome user's password via the admin API.
+
+    Navidrome's PUT replaces the whole user record, so a password-only payload
+    would blank userName/name/email. Fetch the current record and send it back
+    with the new password."""
     session = _admin_session(base_url, admin_user, admin_pass)
+    url = base_url.rstrip("/") + f"/api/user/{nd_user_id}"
+    resp = session.get(url)
+    _raise_for_status(resp)
+    user = resp.json()
+    user["password"] = new_password
     resp = session.put(
-        base_url.rstrip("/") + f"/api/user/{nd_user_id}",
-        json={"password": new_password},
+        url,
+        json=user,
         headers={"Content-Type": "application/json"},
     )
     _raise_for_status(resp)
