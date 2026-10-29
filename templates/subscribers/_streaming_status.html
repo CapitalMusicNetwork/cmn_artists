@@ -1,0 +1,18 @@
+{% if not profile.navidrome_user_id %}
+  <span class="badge badge-red">no streaming account</span>
+{% elif not profile.library_access_managed %}
+  <span class="badge badge-blue">full access (staff)</span>
+{% elif profile.library_access_granted %}
+  <span class="badge badge-green">access granted</span>
+{% else %}
+  <span class="badge">no access</span>
+{% endif %}
+{% if profile.navidrome_access_error and profile.library_access_managed %}
+  <span class="badge badge-red">sync failed</span>
+{% endif %}
+{% if show_temp_access and profile.temporary_access_active %}
+  <div class="muted">temp access until {{ profile.temporary_access_until|date:"M j, Y" }}</div>
+{% endif %}
+{% if profile.navidrome_user_id %}
+  <div class="muted nd-id">{{ profile.navidrome_user_id }}</div>
+{% endif %}

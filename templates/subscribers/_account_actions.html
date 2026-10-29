@@ -1,0 +1,29 @@
+{% load hijack %}
+<div class="row-actions">
+  {% if not profile.navidrome_user_id %}
+  <form method="POST" action="{% url 'admin-resync-navidrome' profile.pk %}">
+    {% csrf_token %}
+    <button type="submit">re-sync</button>
+  </form>
+  {% endif %}
+  {% if profile.navidrome_user_id and profile.admin_can_grant_access %}
+  <form method="POST" action="{% url 'admin-grant-navidrome-access' profile.pk %}">
+    {% csrf_token %}
+    <button type="submit">grant access</button>
+  </form>
+  {% endif %}
+  {% if profile.navidrome_user_id and profile.admin_can_revoke_access %}
+  <form method="POST" action="{% url 'admin-revoke-navidrome-access' profile.pk %}">
+    {% csrf_token %}
+    <button type="submit" class="danger">revoke access</button>
+  </form>
+  {% endif %}
+  {% if request.user|can_hijack:profile.user %}
+  <form method="POST" action="{% url 'hijack:acquire' %}">
+    {% csrf_token %}
+    <input type="hidden" name="user_pk" value="{{ profile.user.pk }}">
+    <input type="hidden" name="next" value="{% url 'dashboard' %}">
+    <button type="submit" class="secondary">demo as</button>
+  </form>
+  {% endif %}
+</div>

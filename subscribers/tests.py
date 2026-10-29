@@ -129,6 +129,57 @@ class AdminGrantRevokeEntitlementTests(TestCase):
         self.assertIsNone(self.profile.temporary_access_until)
 
 
+@override_settings(STATICFILES_STORAGE='django.contrib.staticfiles.storage.StaticFilesStorage')
+class AdminUserListGroupingTests(TestCase):
+    def setUp(self):
+        self.staff = User.objects.create_user(username='staff@example.com', email='staff@example.com', is_staff=True)
+        self.client.force_login(self.staff)
+
+    def groups(self):
+        context = self.client.get('/subscribe/admin/users/').context
+        return {name: [p.user.email for p in context[name]] for name in ('listeners', 'artists', 'admins')}
+
+    def test_accounts_are_split_into_listeners_artists_and_admins(self):
+        make_subscriber('listener@example.com')
+        make_artist('pending@example.com', 'Pending Band', status=ArtistProfile.STATUS_PENDING)
+        make_artist('band@example.com', 'The Band')
+        staff_artist = make_artist('support@example.com', 'Erin')
+        staff_artist.user.is_staff = True
+        staff_artist.user.save()
+
+        self.assertEqual(self.groups(), {
+            'listeners': ['listener@example.com', 'pending@example.com'],
+            'artists': ['band@example.com'],
+            'admins': ['staff@example.com', 'support@example.com'],
+        })
+
+    def test_pending_artist_application_is_flagged_on_listener_row(self):
+        make_artist('pending@example.com', 'Pending Band', status=ArtistProfile.STATUS_PENDING)
+
+        response = self.client.get('/subscribe/admin/users/')
+
+        self.assertContains(response, 'artist application pending')
+
+    def test_temp_access_form_only_shown_for_listeners(self):
+        listener = make_subscriber('listener@example.com')
+        artist = make_artist('band@example.com', 'The Band').user.subscriber_profile
+
+        content = self.client.get('/subscribe/admin/users/').content.decode()
+
+        self.assertIn(f'/users/{listener.pk}/grant-access/', content)
+        self.assertNotIn(f'/users/{artist.pk}/grant-access/', content)
+
+    def test_temp_access_refused_for_artists(self):
+        artist = make_artist('band@example.com', 'The Band').user.subscriber_profile
+        artist.subscription_status = SubscriberProfile.STATUS_ARTIST
+        artist.save()
+
+        self.client.post(f'/subscribe/admin/users/{artist.pk}/grant-access/', {'days': '30'})
+
+        artist.refresh_from_db()
+        self.assertIsNone(artist.temporary_access_until)
+
+
 class StaffLibraryAccessTests(TestCase):
     def test_staff_have_library_access_regardless_of_subscription_status(self):
         profile = make_subscriber('staffer@example.com', is_staff=True)

@@ -338,7 +338,20 @@ class AdminUserListView(StaffRequiredMixin, View):
             .select_related('user', 'user__artist_profile')
             .order_by('user__email')
         )
-        return render(request, self.template_name, {'profiles': profiles})
+        admins, artists, listeners = [], [], []
+        for profile in profiles:
+            artist_profile = getattr(profile.user, 'artist_profile', None)
+            if profile.user.is_staff:
+                admins.append(profile)
+            elif artist_profile and artist_profile.is_approved:
+                artists.append(profile)
+            else:
+                listeners.append(profile)
+        return render(request, self.template_name, {
+            'admins': admins,
+            'artists': artists,
+            'listeners': listeners,
+        })
 
 
 class AdminMoneyView(StaffRequiredMixin, View):
@@ -456,6 +469,9 @@ class AdminGrantTemporaryAccessView(StaffRequiredMixin, View):
         profile = get_object_or_404(SubscriberProfile, pk=pk)
         if not profile.library_access_managed:
             messages.error(request, f'{profile.user.email} is staff and already has full access.')
+            return redirect('admin-user-list')
+        if profile.subscription_status == SubscriberProfile.STATUS_ARTIST:
+            messages.error(request, f'{profile.user.email} is an artist and already has streaming access.')
             return redirect('admin-user-list')
         days_str = request.POST.get('days', '').strip()
 

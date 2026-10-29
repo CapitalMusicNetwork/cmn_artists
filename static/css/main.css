@@ -263,6 +263,39 @@ tr:last-child td {
   vertical-align: top;
 }
 
+/* accounts page: compact enough to fit the page width without scrolling */
+.accounts-table {
+  margin-bottom: 2.5rem;
+}
+
+.accounts-table td {
+  overflow-wrap: anywhere;
+}
+
+.accounts-table .muted {
+  font-size: 0.8rem;
+}
+
+.accounts-table .nd-id {
+  font-family: monospace;
+}
+
+.accounts-table button {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.row-actions .days-input {
+  width: 4.5rem;
+}
+
 .badge {
   display: inline-block;
   border: 1px solid #bbb;
