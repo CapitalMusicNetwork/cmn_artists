@@ -8,22 +8,31 @@ logger = logging.getLogger(__name__)
 
 
 class NavidromeAccountAdapter(DefaultAccountAdapter):
-    def save_user(self, request, user, form, commit=True):
-        # Capture plaintext password before super() hashes it via user.set_password().
-        # adapter.set_password() is NOT called during signup — allauth calls
-        # user.set_password() directly inside save_user, so we must hook here.
-        password = form.cleaned_data.get('password1') or form.cleaned_data.get('password')
-        user = super().save_user(request, user, form, commit=commit)
-        if commit and password:
-            self._sync_navidrome(user, password, request)
+    """Keeps each user's Navidrome password in sync with their password here.
+
+    Navidrome needs the plaintext password, which we only see while someone is
+    typing it, so we hook the places allauth handles it. The Navidrome account is
+    created at the first login after the email address is verified, not at
+    signup, so bot signups that never confirm their email don't leave working
+    Navidrome logins behind.
+    """
+
+    def authenticate(self, request, **credentials):
+        user = super().authenticate(request, **credentials)
+        password = credentials.get('password')
+        if user and password:
+            profile = _subscriber_profile(user)
+            if profile and not profile.navidrome_user_id and _email_verified(user):
+                self._sync_navidrome(user, password, request)
         return user
 
     def set_password(self, user, password):
-        # Called by allauth for password change and password reset flows,
-        # but NOT for initial signup (see save_user above).
+        # Called by allauth for password change and password reset flows.
         # Note: allauth calls get_adapter() without a request here, so self.request is None.
         super().set_password(user, password)
-        self._sync_navidrome(user, password, request=None)
+        profile = _subscriber_profile(user)
+        if profile and (profile.navidrome_user_id or _email_verified(user)):
+            self._sync_navidrome(user, password, request=None)
 
     def _sync_navidrome(self, user, password, request):
         from artists.navidrome import create_navidrome_user, update_navidrome_password
@@ -66,6 +75,18 @@ class NavidromeAccountAdapter(DefaultAccountAdapter):
             if is_new_account and request:
                 messages.error(
                     request,
-                    'Your account was created, but we could not connect to the streaming server. '
+                    'You\'re logged in, but we could not set up your streaming account. '
                     'Please contact us so we can sort it out.'
                 )
+
+
+def _subscriber_profile(user):
+    from subscribers.models import SubscriberProfile
+
+    return SubscriberProfile.objects.filter(user=user).first()
+
+
+def _email_verified(user):
+    from allauth.account.models import EmailAddress
+
+    return EmailAddress.objects.filter(user=user, verified=True).exists()

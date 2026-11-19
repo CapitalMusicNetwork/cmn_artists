@@ -59,3 +59,9 @@ class Command(BaseCommand):
         # Auto-expires staff-granted temporary sample access; harmless to run
         # more or less often since it's just a filtered query + revoke.
         call_command('revoke_expired_access')
+
+        # ── Daily, 4am local ──
+        # Removes bot signups that never verified their email. Only touches
+        # accounts at least a week old, and (by default) without a Navidrome user.
+        if dj_timezone.localtime(now).hour == 4:
+            call_command('delete_unverified_accounts')

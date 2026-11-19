@@ -4,8 +4,11 @@ import time
 logger = logging.getLogger('activity')
 
 SENSITIVE_KEY_PARTS = ('password', 'token', 'secret', 'salt')
-SKIPPED_FIELDS = {'csrfmiddlewaretoken'}
+SKIPPED_FIELDS = {'csrfmiddlewaretoken', 'altcha'}
 SKIPPED_PATH_PREFIXES = ('/static/', '/media/', '/favicon.ico')
+# Requests where we also log the browser and referrer, to tell bot signups
+# from real ones.
+CLIENT_DETAIL_PATHS = ('/accounts/signup/', '/accounts/altcha-challenge/')
 
 
 def redact(data):
@@ -41,6 +44,9 @@ class ActivityLogMiddleware:
             f'user={self._user(request)}',
             f'ip={self._ip(request)}',
         ]
+        if request.path in CLIENT_DETAIL_PATHS:
+            parts.append(f'ua={request.META.get("HTTP_USER_AGENT", "")!r}')
+            parts.append(f'referer={request.META.get("HTTP_REFERER", "")!r}')
         if response.has_header('Location'):
             parts.append(f'location={response["Location"]}')
         if request.method == 'POST':

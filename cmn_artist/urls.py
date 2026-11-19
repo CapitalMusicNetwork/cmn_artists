@@ -13,6 +13,7 @@ from artists.views import (
     PrivacyView,
     TutorialView,
 )
+from subscribers.signup_protection import challenge_view as altcha_challenge_view
 from subscribers.views import AccountSettingsView, StripeWebhookView
 
 
@@ -23,6 +24,7 @@ def home_view(request):
 
 urlpatterns = [
     path('', home_view, name='home'),
+    path('accounts/altcha-challenge/', altcha_challenge_view, name='altcha-challenge'),
     path('accounts/', include('allauth.urls')),
     path('hijack/', include('hijack.urls')),
     path('profile/', include('artists.urls')),

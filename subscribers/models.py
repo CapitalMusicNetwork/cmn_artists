@@ -188,3 +188,14 @@ class SubscriptionPayment(models.Model):
         verbose_name = 'Subscription Payment'
         verbose_name_plural = 'Subscription Payments'
         ordering = ['-paid_at']
+
+
+class UsedAltchaChallenge(models.Model):
+    """Nonces of ALTCHA challenges already accepted at signup, so a solved challenge
+    can't be replayed. Rows are pruned once the challenge would have expired anyway."""
+
+    nonce = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField(db_index=True)
+
+    def __str__(self):
+        return self.nonce

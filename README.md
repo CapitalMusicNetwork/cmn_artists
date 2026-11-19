@@ -36,7 +36,7 @@ This doesn't actually use the API - we just have a folder that is shared between
 
 This is a brief summary. See `accounts/navidrome.py` for implementation details.
 
-The goal is that users should only interact with our app to manage their Navidrome account. When a user creates an account on our site, they automatically get an account with the same username/password in Navidrome. This happens via a [Django AllAuth AccountAdapter](https://docs.allauth.org/en/latest/account/adapter.html) ( see `subscribers.adapter.NavidromeAccountAdapter`) which captures the plaintext password as the user is created and sends it to the Navidrome API. Note that Django and Navidrome have their own separate hashing schemes so the passwords won't match in the database, but their plaintext will be the same. This also means that there's no way to 're-sync' the passwords if they get out of sync - there's no way to take the hashed password from Django, unhash it, and send it to Navidrome. A password reset works via the Django app because it gets the new password in plaintext and sends to Navidrome.
+The goal is that users should only interact with our app to manage their Navidrome account. When a user verifies their email and logs in for the first time, they automatically get an account with the same username/password in Navidrome. (It waits for verification so bot signups that never confirm their email don't get Navidrome logins.) This happens via a [Django AllAuth AccountAdapter](https://docs.allauth.org/en/latest/account/adapter.html) (see `subscribers.adapter.NavidromeAccountAdapter`) which captures the plaintext password as the user logs in and sends it to the Navidrome API. Note that Django and Navidrome have their own separate hashing schemes so the passwords won't match in the database, but their plaintext will be the same. This also means that there's no way to 're-sync' the passwords if they get out of sync - there's no way to take the hashed password from Django, unhash it, and send it to Navidrome. A password reset works via the Django app because it gets the new password in plaintext and sends to Navidrome.
 
 #### Subscriptions
 
@@ -79,6 +79,12 @@ For development, I'm connecting to the production Navidrome instance (setting up
 ```
 
 From there, we can use any of Stripe's test credit cards to place fake payments: <https://docs.stripe.com/testing>
+
+### Signup bot protection
+
+The signup form has a hidden honeypot field and a self-hosted [ALTCHA](https://altcha.org) proof-of-work check: no third-party service is involved. Challenges are served from `/accounts/altcha-challenge/` and signed with a key derived from `SECRET_KEY` (see `subscribers/signup_protection.py`); the widget is vendored in `static/vendor/altcha/`. Blocked attempts are logged as `Blocked signup for ...` warnings.
+
+Accounts that never verify their email are deleted after 7 days by the scheduler (`python manage.py delete_unverified_accounts`, see `--help`).
 
 ## Backups
 

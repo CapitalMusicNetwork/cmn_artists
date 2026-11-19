@@ -160,6 +160,8 @@ STRIPE_WEBHOOK_SECRET = config('STRIPE_WEBHOOK_SECRET', default='')
 STRIPE_SUBSCRIPTION_PRICE_ID = config('STRIPE_SUBSCRIPTION_PRICE_ID', default='')
 
 ACCOUNT_ADAPTER = 'subscribers.adapter.NavidromeAccountAdapter'
+# Adds the ALTCHA proof-of-work check and a honeypot field to signup.
+ACCOUNT_FORMS = {'signup': 'subscribers.forms.SignupForm'}
 
 # django-hijack — lets staff log in as another user for live demos/support
 HIJACK_LOGIN_REDIRECT_URL = '/dashboard/'
