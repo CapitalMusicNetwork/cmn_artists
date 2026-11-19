@@ -142,9 +142,15 @@ def revoke_library_access(base_url: str, admin_user: str, admin_pass: str,
     _raise_for_status(resp)
 
 
-def delete_navidrome_user(base_url: str, admin_user: str, admin_pass: str, nd_user_id: str) -> None:
-    """Delete a Navidrome user. A user that's already gone counts as deleted."""
-    session = _admin_session(base_url, admin_user, admin_pass)
+def admin_session(base_url: str, admin_user: str, admin_pass: str):
+    """An authenticated admin session to reuse across many calls. Navidrome
+    rate-limits /auth/login per IP, so bulk jobs must not log in once per call."""
+    return _admin_session(base_url, admin_user, admin_pass)
+
+
+def delete_navidrome_user(base_url: str, nd_user_id: str, session) -> None:
+    """Delete a Navidrome user using an `admin_session()`. A user that's already
+    gone counts as deleted."""
     resp = session.delete(base_url.rstrip("/") + f"/api/user/{nd_user_id}")
     if resp.status_code == 404:
         return

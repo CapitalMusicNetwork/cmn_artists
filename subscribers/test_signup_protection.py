@@ -151,11 +151,11 @@ class NavidromeAccountTimingTests(TestCase):
 @NAVIDROME
 class DeleteUnverifiedAccountsTests(TestCase):
     def setUp(self):
-        patcher = mock.patch(
-            'subscribers.management.commands.delete_unverified_accounts.delete_navidrome_user'
-        )
-        self.delete_navidrome_user = patcher.start()
-        self.addCleanup(patcher.stop)
+        command = 'subscribers.management.commands.delete_unverified_accounts'
+        for name in ('admin_session', 'delete_navidrome_user'):
+            patcher = mock.patch(f'{command}.{name}')
+            setattr(self, name, patcher.start())
+            self.addCleanup(patcher.stop)
 
     def make_user(self, email, days_ago=10, verified=False, navidrome_user_id='', **fields):
         user = User.objects.create(
@@ -212,6 +212,26 @@ class DeleteUnverifiedAccountsTests(TestCase):
         output = self.run_command('--include-navidrome')
         self.assertIn('legacy@example.com', self.remaining())
         self.assertIn('Skipped 1', output)
+
+    def test_logs_in_to_navidrome_once_per_run(self):
+        self.make_user('bot1@example.com', navidrome_user_id='nd1')
+        self.make_user('bot2@example.com', navidrome_user_id='nd2')
+        self.make_user('bot3@example.com', navidrome_user_id='nd3')
+        self.run_command('--include-navidrome')
+        self.admin_session.assert_called_once()
+        self.assertEqual(self.delete_navidrome_user.call_count, 3)
+        self.assertEqual(self.remaining(), set())
+
+    def test_failed_navidrome_login_is_not_retried_per_account(self):
+        self.make_user('bot1@example.com', navidrome_user_id='nd1')
+        self.make_user('bot2@example.com', navidrome_user_id='nd2')
+        self.make_user('plain@example.com')
+        self.admin_session.side_effect = RuntimeError('429 Too Many Requests')
+        output = self.run_command('--include-navidrome')
+        self.admin_session.assert_called_once()
+        self.delete_navidrome_user.assert_not_called()
+        self.assertEqual(self.remaining(), {'bot1@example.com', 'bot2@example.com'})
+        self.assertIn('Skipped 2', output)
 
     def test_dry_run_deletes_nothing(self):
         self.make_user('bot@example.com', navidrome_user_id='nd1')

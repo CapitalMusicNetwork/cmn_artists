@@ -7,7 +7,7 @@ from django.contrib.auth.models import User
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from artists.navidrome import delete_navidrome_user
+from artists.navidrome import admin_session, delete_navidrome_user
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,8 @@ class Command(BaseCommand):
         if not include_navidrome:
             candidates = candidates.filter(subscriber_profile__navidrome_user_id='')
 
+        self._navidrome_session = None
+        self._navidrome_unavailable = False
         deleted = failed = 0
         for user in candidates:
             if dry_run:
@@ -67,7 +69,8 @@ class Command(BaseCommand):
         prefix = '[dry run] would delete' if dry_run else 'Deleted'
         summary = f'{prefix} {deleted} unverified account(s).'
         if failed:
-            summary += f' Skipped {failed} whose Navidrome user could not be deleted; they will be retried next run.'
+            summary += (f' Skipped {failed} whose Navidrome user could not be deleted; '
+                        f'run again with --include-navidrome to retry them.')
         self.stdout.write(self.style.SUCCESS(summary))
 
     def _delete_navidrome_user(self, user):
@@ -76,19 +79,29 @@ class Command(BaseCommand):
         nd_user_id = profile.navidrome_user_id if profile else ''
         if not nd_user_id:
             return True
-        if not settings.NAVIDROME_BASE_URL:
-            self.stdout.write(self.style.WARNING(
-                f'{user.email}: has Navidrome user {nd_user_id} but NAVIDROME_BASE_URL is not set'
-            ))
+        session = self._get_navidrome_session()
+        if session is None:
             return False
         try:
-            delete_navidrome_user(
-                base_url=settings.NAVIDROME_BASE_URL,
-                admin_user=settings.NAVIDROME_ADMIN_USER,
-                admin_pass=settings.NAVIDROME_ADMIN_PASS,
-                nd_user_id=nd_user_id,
-            )
+            delete_navidrome_user(base_url=settings.NAVIDROME_BASE_URL, nd_user_id=nd_user_id, session=session)
         except Exception:
             logger.exception('Failed to delete Navidrome user %s for %s', nd_user_id, user.email)
             return False
         return True
+
+    def _get_navidrome_session(self):
+        """Log in to Navidrome once per run. If that fails, give up on Navidrome for
+        the rest of the run rather than retrying the login for every account."""
+        if self._navidrome_session is None and not self._navidrome_unavailable:
+            if not settings.NAVIDROME_BASE_URL:
+                self.stdout.write(self.style.WARNING('NAVIDROME_BASE_URL is not set; skipping accounts with Navidrome users'))
+                self._navidrome_unavailable = True
+                return None
+            try:
+                self._navidrome_session = admin_session(
+                    settings.NAVIDROME_BASE_URL, settings.NAVIDROME_ADMIN_USER, settings.NAVIDROME_ADMIN_PASS,
+                )
+            except Exception:
+                logger.exception('Could not log in to Navidrome; skipping accounts with Navidrome users')
+                self._navidrome_unavailable = True
+        return self._navidrome_session
